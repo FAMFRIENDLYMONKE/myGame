@@ -1,6 +1,6 @@
 import pygame
 from constants import *
-from level import Level
+from level_loader import load_level_from_image
 
 class GameState:
     def handle_event(self, event):
@@ -30,7 +30,7 @@ class HomeScreen(GameState):
         
         screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, SCREEN_HEIGHT//2 - 100))
         screen.blit(subtitle, (SCREEN_WIDTH//2 - subtitle.get_width()//2, SCREEN_HEIGHT//2 + 50))
-
+    
 class MenuScreen(GameState):
     def __init__(self, state_manager):
         self.state_manager = state_manager
@@ -67,13 +67,13 @@ class MenuScreen(GameState):
 class GameScreen(GameState):
     def __init__(self, state_manager):
         self.state_manager = state_manager
-        self.level = Level('Dangerous_Dave_Level_format.png')
-        self.player = Player(*self.level.get_spawn_point())
+        self.platforms, self.collectibles, spawn_point = load_level_from_image('Dangerous_Dave_Level_format.png')
+        self.player = Player(*spawn_point)
         self.bullets = []
-        self.collectibles = list(self.level.get_collectibles())
         self.score = 0
         self.timer = 0
         self.font = pygame.font.Font(None, 36)
+        self.brick_texture = pygame.image.load('assets/brick-wall.png')
     
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
@@ -85,7 +85,7 @@ class GameScreen(GameState):
     def update(self, dt):
         self.timer += dt
         keys = pygame.key.get_pressed()
-        self.player.update(dt, keys, self.level.get_platforms())
+        self.player.update(dt, keys, self.platforms)
         
         for bullet in self.bullets[:]:
             bullet.update(dt)
@@ -99,11 +99,13 @@ class GameScreen(GameState):
                 self.score += 100
     
     def draw(self, screen):
-        self.level.draw_background(screen)
+        screen.fill(BLACK)
         
-        # Draw platforms
-        for platform in self.level.get_platforms():
-            pygame.draw.rect(screen, BLACK, platform)
+        # Draw platforms with scaled brick texture
+        for platform in self.platforms:
+            # Scale brick to fit platform better
+            scaled_brick = pygame.transform.scale(self.brick_texture, (platform.width, platform.height))
+            screen.blit(scaled_brick, (platform.x, platform.y))
         
         # Draw collectibles
         for collectible in self.collectibles:
@@ -125,17 +127,48 @@ class Player:
         self.rect = pygame.Rect(x, y, 32, 48)
         self.vel_y = 0
         self.on_ground = False
-        self.has_gun = True  # Start with gun for testing
-        self.facing = 1  # 1 for right, -1 for left
+        self.has_gun = True
+        self.facing = 1
+        
+        # Load Dave sprites
+        try:
+            self.dave_right_idle = pygame.transform.scale(pygame.image.load('assets/dave2.png'), (32, 48))
+            self.dave_right_run = [pygame.transform.scale(pygame.image.load('assets/dave3.png'), (32, 48)),
+                                   pygame.transform.scale(pygame.image.load('assets/dave4.png'), (32, 48))]
+            self.dave_left_idle = pygame.transform.scale(pygame.image.load('assets/dave5.png'), (32, 48))
+            self.dave_left_run = [pygame.transform.scale(pygame.image.load('assets/dave6.png'), (32, 48)),
+                                  pygame.transform.scale(pygame.image.load('assets/dave7.png'), (32, 48))]
+        except:
+            # Fallback rectangles
+            self.dave_right_idle = pygame.Surface((32, 48))
+            self.dave_right_idle.fill(GREEN)
+            self.dave_right_run = [self.dave_right_idle, self.dave_right_idle]
+            self.dave_left_idle = self.dave_right_idle
+            self.dave_left_run = [self.dave_right_idle, self.dave_right_idle]
+        
+        self.run_frame = 0
+        self.animation_timer = 0
+        self.animation_speed = 0.3
+        self.is_moving = False
     
     def update(self, dt, keys, platforms):
         # Horizontal movement
+        self.is_moving = False
         if keys[pygame.K_LEFT] or keys[pygame.K_a]:
             self.rect.x -= PLAYER_SPEED * dt
             self.facing = -1
+            self.is_moving = True
         if keys[pygame.K_RIGHT] or keys[pygame.K_d]:
             self.rect.x += PLAYER_SPEED * dt
             self.facing = 1
+            self.is_moving = True
+        
+        # Animation
+        if self.is_moving:
+            self.animation_timer += dt
+            if self.animation_timer >= self.animation_speed:
+                self.run_frame = 1 - self.run_frame
+                self.animation_timer = 0
         
         # Jumping
         if (keys[pygame.K_UP] or keys[pygame.K_w]) and self.on_ground:
@@ -144,24 +177,44 @@ class Player:
         
         # Gravity
         self.vel_y += GRAVITY * dt
+        old_y = self.rect.y
         self.rect.y += self.vel_y * dt
         
         # Platform collision
         self.on_ground = False
         for platform in platforms:
             if self.rect.colliderect(platform):
-                if self.vel_y > 0:  # Falling
+                if self.vel_y > 0 and old_y + self.rect.height <= platform.top + 5:
+                    # Landing on top of platform
                     self.rect.bottom = platform.top
                     self.vel_y = 0
                     self.on_ground = True
+                elif self.vel_y < 0 and old_y >= platform.bottom - 5:
+                    # Hitting platform from below
+                    self.rect.top = platform.bottom
+                    self.vel_y = 0
         
         # Screen bounds
         self.rect.x = max(0, min(self.rect.x, SCREEN_WIDTH - self.rect.width))
-        if self.rect.y > SCREEN_HEIGHT:
-            self.rect.y = SCREEN_HEIGHT - 100  # Reset if fall off screen
+        
+        # Manual ground boundary
+        if self.rect.bottom >= SCREEN_HEIGHT - 50:
+            self.rect.bottom = SCREEN_HEIGHT - 50
+            self.vel_y = 0
+            self.on_ground = True
     
     def draw(self, screen):
-        pygame.draw.rect(screen, GREEN, self.rect)
+        if self.is_moving:
+            if self.facing == 1:
+                sprite = self.dave_right_run[self.run_frame]
+            else:
+                sprite = self.dave_left_run[self.run_frame]
+        else:
+            if self.facing == 1:
+                sprite = self.dave_right_idle
+            else:
+                sprite = self.dave_left_idle
+        screen.blit(sprite, self.rect)
 
 class Bullet:
     def __init__(self, x, y, direction):

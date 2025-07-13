@@ -16,7 +16,7 @@ DARK_GRAY = (64, 64, 64)
 
 # Player settings
 PLAYER_SPEED = 200
-JUMP_SPEED = 400
+JUMP_SPEED = 600
 GRAVITY = 1000
 
 # Game settings
